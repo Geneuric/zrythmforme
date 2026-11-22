@@ -1,0 +1,66 @@
+name: Build Zrythm v2 (Windows x64)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout Zrythm with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSVC 2022 Developer Environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Conan & Build Requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Zrythm Conan Config & Export Custom Recipes
+        run: |
+          conan config install conan
+          conan remote add conan-local-index ext/conan-center-index
+          python tools/export_conan_recipes.py
+
+      - name: Inspect & Align MSVC Compiler Version in Conan Profile
+        shell: pwsh
+        run: |
+          Get-Content "$env:USERPROFILE\.conan2\profiles\_msvc"
+          conan profile detect --name temp_detect --force
+          Get-Content "$env:USERPROFILE\.conan2\profiles\temp_detect"
+
+      - name: Install Dependencies via Conan (Builds Qt 6.12 & Deps)
+        run: |
+          conan install . -pr:h msvc_release -pr:b msvc_release --build=missing
+
+      - name: Configure & Build Zrythm with CMake + Ninja
+        run: |
+          cmake --preset default
+          cmake --build conanbuild/Release --config Release --parallel
+
+      - name: Install & Package Portable Windows Build
+        run: |
+          cmake --install conanbuild/Release --config Release --prefix dist/Zrythm
+          if (Test-Path "conanbuild/Release/products/bin") {
+            Copy-Item -Path "conanbuild/Release/products/bin\*" -Destination "dist/Zrythm/bin" -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zrythm-v2-Windows-x64
+          path: dist/Zrythm/
+          retention-days: 14
